@@ -29,3 +29,64 @@
 git clone https://github.com/kingvic273-beep/pdf2md-library.git
 cd pdf2md-library
 npm install          # 安装 adm-zip
+```
+
+## 快速开始
+
+**0. 配置 Token**（[mineru.net](https://mineru.net) 注册后，在 API 管理页创建）：
+
+```bash
+export MINERU_API_TOKEN="sk-xxxx"        # 或写入工具目录 token.txt（被 .gitignore 排除）
+```
+
+**1. 解析一本书**：
+
+```bash
+node parse.mjs "论文.pdf"                          # 默认 vlm + OCR + 中文
+node parse.mjs "扫描书.pdf" --pages 1-100 --out "书_mineru"
+```
+
+输出目录（默认 `<pdf同目录>/<文件名>_mineru/`）：`full.md`（全书 Markdown）、`*_content_list.json`（分块文本+页码映射）、`layout.json`（版面）、`images/`（图片）。
+
+**2. 归档并登记进图书馆**：
+
+```bash
+mkdir -p library/我的书
+cp 书_mineru/full.md 书_mineru/*.json library/我的书/
+node index.mjs "library/我的书" "《我的书》（作者，版本）" \
+  --offset 8 --tags "海德格尔,现象学" --info "扫描版 vlm+OCR"
+```
+
+（`--offset`：书页 = PDF 页 − N，先看 full.md 目录页校准一次。）
+
+**3. 检索内容**：
+
+```bash
+node search.mjs "library/我的书" "本质现身" "Wesen" --offset 8
+```
+
+**4. Agent 找书闭环**（token 经济）：读 `library/索引.md`（~1–2K token）→ 或 grep 整个 library（零 token）→ 只读目标章（几千–2 万 token）。
+
+## 命令一览
+
+| 命令 | 功能 |
+|---|---|
+| `pdf2md-parse <pdf> [选项]` | PDF → Markdown（`--model --no-ocr --lang --pages --out`） |
+| `pdf2md-search <目录> <关键词...> [--offset N]` | 检索 + 页码换算 |
+| `pdf2md-index <书目录> [书名] [--library 根] [--offset N] [--tags] [--info]` | 登记图书馆索引 |
+
+## 额度与成本
+
+- **解析**：0 DeepSeek token；MinerU 官方免费（每天 1000 页最高优先级，单文件 ≤200MB、≤200 页）；
+- **读取**：full.md 中文约 1–1.5 token/字；整本 200 页书 ≈ 10–20 万 token 全读，按章读每次几千–2 万 token；
+- 每本书只解析一次，`full.md` 永久复用。
+
+## 免责声明
+
+- 工具本身为通用文档解析；请确保解析内容符合版权与相关法规；
+- MinerU API 条款与免费额度以其官网为准；
+- Token 属敏感凭证，请勿提交到公开仓库。
+
+## 许可证
+
+MIT © 2026 kingvic273-beep
