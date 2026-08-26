@@ -8,6 +8,8 @@
 
 - **扫描版可读**：基于 [MinerU](https://mineru.net) 官方 API（opendatalab），vlm 模型 + OCR，192 页扫描版也能全书转 Markdown；
 - **超长书自动分片**：>200 页的 PDF 自动按 200 页/片分批解析、自动合并（无需手动分批），输出全局页码；
+- **超 200MB 自动物理切片**：文件超出 MinerU 单文件大小上限时自动按 200 页/片切文件再解析合并（上限可用环境变量 `PDF2MD_MAX_FILE_MB` 覆盖）；
+- **流式上传**：上传不把整个文件读入内存，大文件/并发更稳（避免 OOM/ENOBUFS）；
 - **图书馆索引**：每本书自动登记（解析日期 / token 量 / 页码换算 / 主题标签 / 章节索引），找书先读索引（~1–2K token）；
 - **页码换算**：MinerU 输出 PDF 页码，`--offset` 一键换算为书页/边码，可直接用于论文引用；
 - **token 经济**：解析阶段 0 token（MinerU 云端免费额度）；读取阶段中文约 1–1.5 token/字，`full.md` 落盘后可跨会话复用；
@@ -88,7 +90,7 @@ node search.mjs "library/我的书" "本质现身" "Wesen" --offset 8
 
 | 命令 | 功能 |
 |---|---|
-| `pdf2md-parse <pdf> [选项]` | PDF → Markdown（`--model --no-ocr --lang --pages --out`；**>200 页自动分片合并**） |
+| `pdf2md-parse <pdf> [选项]` | PDF → Markdown（`--model --no-ocr --lang --pages --out`；**>200 页自动分片、>200MB 自动物理切片**） |
 | `pdf2md-search <目录> <关键词...> [--offset N]` | 检索 + 页码换算 |
 | `pdf2md-index <书目录> [书名] [--library 根] [--offset N] [--tags] [--info]` | 登记图书馆索引 |
 | `pdf2md-merge <书目录> <part:偏移,...>` | 手动合并多批解析结果（一般无需使用，parse 已自动合并） |

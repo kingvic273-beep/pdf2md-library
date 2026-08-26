@@ -12,6 +12,8 @@
  *   -h, --help             显示本帮助
  * 特性：
  *   - 自动分片：>200 页的 PDF 自动按 200 页/片分批解析、合并（full.md + merged_content_list.json）
+ *   - 自动物理切片：文件 >200MB（可设 PDF2MD_MAX_FILE_MB 覆盖）时先按 200 页/片切文件再解析合并
+ *   - 流式上传：上传不占整文件内存（ENOBUFS/大文件友好）
  *   - 页码映射：merged_content_list.json 的 page_idx 为全局 PDF 页码
  * 说明：解析不消耗 DeepSeek token；官方免费额度每天 1000 页优先，文件 ≤200MB。
  */
@@ -24,6 +26,10 @@ import { PDFDocument } from 'pdf-lib';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BATCH = 200; // MinerU 单次页数上限
+const MAX_FILE_BYTES = (() => {
+  const mb = Number(process.env.PDF2MD_MAX_FILE_MB || '200');
+  return (Number.isFinite(mb) && mb > 0 ? mb : 200) * 1048576; // 单文件大小上限（可环境变量覆盖，便于测试）
+})();
 
 const tokenFile = path.join(__dirname, 'token.txt');
 const token = process.env.MINERU_API_TOKEN || (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim() : '');
@@ -46,7 +52,7 @@ if (args.includes('--help') || args.includes('-h') || args.length === 0) {
   --out <目录>           输出目录（默认 <pdf同目录>/<文件名>_mineru）
   -h, --help             显示本帮助
 
-特性: >200 页的 PDF 自动分片解析并合并（无需手动分批）
+特性: >200 页或 >200MB 的 PDF 自动分片/切片解析并合并（无需手动分批）
 Token: 环境变量 MINERU_API_TOKEN 或工具目录 token.txt（见 README）
 额度: MinerU 官方免费，每天 1000 页优先，单文件 ≤200MB`);
   process.exit(args.length === 0 ? 1 : 0);
@@ -86,8 +92,8 @@ try {
 }
 console.log(`📄 ${path.basename(pdfPath)} (${(size / 1048576).toFixed(1)}MB${totalPages ? `, ${totalPages} pages` : ''}) → ${outDir}`);
 
-/** 提交一批：申请签名 URL → PUT → 轮询 → 下载解压到 partDir */
-async function submitBatch(range, partDir) {
+/** 提交一批：申请签名 URL → 流式 PUT → 轮询 → 下载解压到 partDir */
+async function submitBatch(range, partDir, filePath = pdfPath) {
   fs.mkdirSync(partDir, { recursive: true });
   const files = [{ name: 'doc.pdf', is_ocr: isOcr }];
   if (range) files[0].page_ranges = range;
@@ -102,7 +108,13 @@ async function submitBatch(range, partDir) {
   }
   const batchId = j1.data.batch_id;
 
-  const r2 = await fetch(j1.data.file_urls[0], { method: 'PUT', body: buf });
+  // 流式上传：不把整个文件读入内存（大文件/并发友好）
+  const r2 = await fetch(j1.data.file_urls[0], {
+    method: 'PUT',
+    headers: { 'Content-Length': String(fs.statSync(filePath).size) },
+    body: fs.createReadStream(filePath),
+    duplex: 'half',
+  });
   if (r2.status >= 300) throw new Error(`上传失败 status: ${r2.status}`);
 
   const deadline = Date.now() + 15 * 60 * 1000;
@@ -156,7 +168,36 @@ function mergeParts(parts, destDir) {
 }
 
 // 主流程
-if (pageRanges || totalPages <= BATCH) {
+if (size > MAX_FILE_BYTES) {
+  // 物理切片路径：文件超大小上限（MinerU 拒收），先按 BATCH 页/片切文件，逐片单批解析，再合并
+  console.log(`📦 文件 ${(size / 1048576).toFixed(1)}MB 超出单文件上限 ${Math.round(MAX_FILE_BYTES / 1048576)}MB，先物理切片（${BATCH} 页/片）…`);
+  const physDir = path.join(outDir, '.phys');
+  fs.mkdirSync(physDir, { recursive: true });
+  const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+  const total = src.getPageCount();
+  const n = Math.ceil(total / BATCH);
+  const parts = [];
+  for (let i = 0; i < n; i++) {
+    const start = i * BATCH;
+    const end = Math.min((i + 1) * BATCH, total);
+    const out = await PDFDocument.create();
+    const pages = await out.copyPages(src, Array.from({ length: end - start }, (_, k) => start + k));
+    pages.forEach((p) => out.addPage(p));
+    const slicePath = path.join(physDir, `part${i + 1}.pdf`);
+    fs.writeFileSync(slicePath, await out.save());
+    console.log(`\n── 物理切片 ${i + 1}/${n}（页 ${start + 1}-${end}，${(fs.statSync(slicePath).size / 1048576).toFixed(1)}MB）──`);
+    const partDir = path.join(outDir, `.part${i + 1}`);
+    await submitBatch(null, partDir, slicePath);
+    parts.push({ dir: partDir, offset: i * BATCH });
+    fs.rmSync(slicePath, { force: true });
+  }
+  fs.rmSync(physDir, { recursive: true, force: true });
+  console.log('\n🧩 合并物理切片…');
+  const merged = mergeParts(parts, outDir);
+  for (const p of parts) fs.rmSync(p.dir, { recursive: true, force: true });
+  console.log(`✅ 合并完成: ${outDir}/full.md + merged_content_list.json（${merged.clBlocks} 块）`);
+  finalReport(outDir, merged.mdChars, merged.mdBytes);
+} else if (pageRanges || totalPages <= BATCH) {
   // 单批（用户指定页码，或总页数未超限/未知）
   await submitBatch(pageRanges, outDir);
   const fullMd = path.join(outDir, 'full.md');
