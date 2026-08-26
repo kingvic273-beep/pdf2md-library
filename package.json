@@ -1,17 +1,19 @@
 {
   "name": "pdf2md-library",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "学术 PDF 图书馆：基于 MinerU 官方 API，将 PDF 解析为 Markdown，支持关键词检索、页码换算与图书馆索引，让文本模型用少量 token 阅读书籍",
   "type": "module",
   "bin": {
     "pdf2md-parse": "./parse.mjs",
     "pdf2md-search": "./search.mjs",
-    "pdf2md-index": "./index.mjs"
+    "pdf2md-index": "./index.mjs",
+    "pdf2md-merge": "./merge.mjs"
   },
   "files": [
     "parse.mjs",
     "search.mjs",
     "index.mjs",
+    "merge.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -38,6 +40,7 @@
     "url": "https://github.com/kingvic273-beep/pdf2md-library.git"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0"
+    "adm-zip": "^0.6.0",
+    "pdf-lib": "^1.17.1"
   }
 }
