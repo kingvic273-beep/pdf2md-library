@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# credentials — 绝不入库
+token.txt
+
+# npm cache
+npm-cache/
+
+# local library (解析结果与索引)
+library/
+
+# misc
+.DS_Store
+*.log
