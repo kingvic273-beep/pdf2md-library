@@ -3,13 +3,16 @@
  * 在 MinerU 解析结果中检索关键词（用 content_list.json 的 page_idx 映射页码）
  * 用法：
  *   node search.mjs <结果目录> <关键词...> [--offset N]
- *   --offset N：PDF页码 - N = 书页/边码页码（每本书偏移不同，先按目录校准一次）
+ *   --offset N：PDF页码 - N = 书页/边码页码（每本书偏移不同；不指定时自动校准）
+ *   --raw：显示 PDF 页码而非书页（跳过自动校准）
  * 示例：
  *   node search.mjs "D:\书\书_mineru" "本质现身" "Wesen"
  *   node search.mjs "D:\书\书_mineru" "本源" --offset 8   # PDF p42 → 书页 34
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { detectOffset } from './pagemarks.mjs';
 
 const args = process.argv.slice(2);
 const dir = args[0];
@@ -19,8 +22,10 @@ if (!dir || !fs.existsSync(dir)) {
 }
 const kws = args.filter((a) => !a.startsWith('--'));
 let offset = 0;
+let offsetGiven = false;
 const oi = args.indexOf('--offset');
-if (oi !== -1) offset = parseInt(args[oi + 1], 10) || 0;
+if (oi !== -1) { offset = parseInt(args[oi + 1], 10) || 0; offsetGiven = true; }
+const rawMode = args.includes('--raw');
 
 const clFile = fs.readdirSync(dir).find((f) => f.endsWith('_content_list.json'));
 if (!clFile) {
@@ -28,6 +33,17 @@ if (!clFile) {
   process.exit(1);
 }
 const cl = JSON.parse(fs.readFileSync(path.join(dir, clFile), 'utf8'));
+
+// 页码换算：--offset 手动 > --raw 原文 > 自动校准 > 0
+if (!offsetGiven && !rawMode) {
+  const det = detectOffset(dir);
+  if (det) {
+    offset = det.offset;
+    console.log(`🔢 自动校准: offset=${offset}（连续 ${det.pages} 页页边码）`);
+  } else {
+    console.log('⚠️ 未检测到页边码序列，显示 PDF 页码（可用 --offset N 或 --raw）');
+  }
+}
 
 const hits = [];
 const walk = (items) => {

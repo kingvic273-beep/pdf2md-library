@@ -9,12 +9,15 @@
  *   --lang ch|en           文档语言（默认 ch）
  *   --pages 1-20           手动指定页码范围（如 "2,4-6"）；指定后不做自动分片
  *   --out <目录>           输出目录（默认 <pdf同目录>/<文件名>_mineru）
+ *   --no-page-marks        关闭页码注入（默认在 full.md 每页首插入 <!-- PDF pN --> 标记）
+ *   --offset N             PDF页码 - N = 书页/边码页码（配合页码注入显示书页，如 --offset 8）
+ *   --auto-offset          自动校准页边码偏移（扫描页脚数字序列，未指定 --offset 时默认尝试自动检测）
  *   -h, --help             显示本帮助
  * 特性：
  *   - 自动分片：>200 页的 PDF 自动按 200 页/片分批解析、合并（full.md + merged_content_list.json）
  *   - 自动物理切片：文件 >200MB（可设 PDF2MD_MAX_FILE_MB 覆盖）时先按 200 页/片切文件再解析合并
  *   - 流式上传：上传不占整文件内存（ENOBUFS/大文件友好）
- *   - 页码映射：merged_content_list.json 的 page_idx 为全局 PDF 页码
+ *   - 页码映射：merged_content_list.json 的 page_idx 为全局 PDF 页码；full.md 自动注入页码标记
  * 说明：解析不消耗 DeepSeek token；官方免费额度每天 1000 页优先，文件 ≤200MB。
  */
 import fs from 'node:fs';
@@ -22,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import AdmZip from 'adm-zip';
 import { PDFDocument } from 'pdf-lib';
+import { injectPageMarks, detectOffset } from './pagemarks.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,6 +54,9 @@ if (args.includes('--help') || args.includes('-h') || args.length === 0) {
   --lang ch|en           文档语言（默认 ch）
   --pages 1-20           手动指定页码范围（如 "2,4-6"）
   --out <目录>           输出目录（默认 <pdf同目录>/<文件名>_mineru）
+  --no-page-marks        关闭页码注入（默认在 full.md 每页首插入 <!-- PDF pN --> 标记）
+  --offset N             PDF页码 - N = 书页/边码页码（配合页码注入显示书页，如 --offset 8）
+  --auto-offset          自动校准页边码偏移（扫描页脚数字序列；未指定 --offset 时默认自动尝试）
   -h, --help             显示本帮助
 
 特性: >200 页或 >200MB 的 PDF 自动分片/切片解析并合并（无需手动分批）
@@ -69,12 +76,34 @@ let isOcr = true;
 let lang = 'ch';
 let pageRanges;
 let outDir;
+let pageMarks = true;
+let offset = 0;
+let offsetGiven = false;
+let autoOffset = false;
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--model') model = args[++i];
   else if (args[i] === '--no-ocr') isOcr = false;
   else if (args[i] === '--lang') lang = args[++i];
   else if (args[i] === '--pages') pageRanges = args[++i];
   else if (args[i] === '--out') outDir = args[++i];
+  else if (args[i] === '--no-page-marks') pageMarks = false;
+  else if (args[i] === '--offset') { offset = parseInt(args[++i], 10) || 0; offsetGiven = true; }
+  else if (args[i] === '--auto-offset') autoOffset = true;
+}
+
+/** 决定页码注入的 offset：手动指定 > 自动校准 > 尝试自动检测 > 0 */
+function resolveOffset(dir) {
+  if (offsetGiven) return { offset, source: 'manual' };
+  if (autoOffset) {
+    const det = detectOffset(dir);
+    if (!det) { console.warn('⚠️ --auto-offset 校准失败（未找到连续 ≥5 页页边码序列），仅标注 PDF 页码'); return { offset: 0, source: 'none' }; }
+    console.log(`🔢 自动校准: 连续 ${det.pages} 页页边码（PDF p${det.startPdf}=书页${det.startNum}），offset=${det.offset}`);
+    return { offset: det.offset, source: 'auto' };
+  }
+  // 未指定：尝试自动检测，失败则回退 PDF 页码
+  const det = detectOffset(dir);
+  if (det) { console.log(`🔢 自动检测页边码: offset=${det.offset}（连续 ${det.pages} 页）`); return { offset: det.offset, source: 'auto' }; }
+  return { offset: 0, source: 'none' };
 }
 if (!outDir) outDir = path.join(path.dirname(pdfPath), path.basename(pdfPath, path.extname(pdfPath)) + '_mineru');
 fs.mkdirSync(outDir, { recursive: true });
@@ -196,12 +225,14 @@ if (size > MAX_FILE_BYTES) {
   const merged = mergeParts(parts, outDir);
   for (const p of parts) fs.rmSync(p.dir, { recursive: true, force: true });
   console.log(`✅ 合并完成: ${outDir}/full.md + merged_content_list.json（${merged.clBlocks} 块）`);
+  if (pageMarks) injectPageMarks(outDir, resolveOffset(outDir));
   finalReport(outDir, merged.mdChars, merged.mdBytes);
 } else if (pageRanges || totalPages <= BATCH) {
   // 单批（用户指定页码，或总页数未超限/未知）
   await submitBatch(pageRanges, outDir);
   const fullMd = path.join(outDir, 'full.md');
   if (fs.existsSync(fullMd)) {
+    if (pageMarks) injectPageMarks(outDir, resolveOffset(outDir));
     const mdBytes = fs.statSync(fullMd).size;
     const mdChars = fs.readFileSync(fullMd, 'utf8').length;
     finalReport(outDir, mdChars, mdBytes);
@@ -223,6 +254,7 @@ if (size > MAX_FILE_BYTES) {
   const merged = mergeParts(parts, outDir);
   for (const p of parts) fs.rmSync(p.dir, { recursive: true, force: true });
   console.log(`✅ 合并完成: ${outDir}/full.md + merged_content_list.json（${merged.clBlocks} 块）`);
+  if (pageMarks) injectPageMarks(outDir, resolveOffset(outDir));
   finalReport(outDir, merged.mdChars, merged.mdBytes);
 } 
 
