@@ -1,14 +1,20 @@
 # dependencies
 node_modules/
 
-# credentials — 绝不入库
+# credentials - NEVER commit
 token.txt
 
 # npm cache
 npm-cache/
 
-# local library (解析结果与索引)
+# local library (parse outputs & index)
 library/
+*_mineru/
+*解析/
+
+# test artifacts
+.pg-*/
+.pagemarks-test/
 
 # misc
 .DS_Store
